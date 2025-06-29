@@ -21,18 +21,26 @@ def read_root():
 def login(channel: str = Query(..., description="Nombre del canal Twitch a monitorear")):
     params = {
         "client_id": CLIENT_ID,
-        "redirect_uri": REDIRECT_URI + f"?channel={channel}",
+        "redirect_uri": REDIRECT_URI,
         "response_type": "code",
-        "scope": "user:read:email user:read:follows"
+        "scope": "user:read:email user:read:follows",
+        "state": channel
     }
     twitch_auth_url = "https://id.twitch.tv/oauth2/authorize?" + urlencode(params)
     return RedirectResponse(twitch_auth_url)
 
 @app.get("/auth/twitch/callback")
-async def auth_callback(request: Request, channel: str = Query(..., description="Nombre del canal Twitch a monitorear")):
+async def auth_callback(request: Request):
     code = request.query_params.get("code")
+    state = request.query_params.get("state")  # Aquí recibimos el canal
+
     if not code:
         return JSONResponse({"error": "No se recibió el código de autorización"}, status_code=400)
+
+    if not state:
+        return JSONResponse({"error": "No se recibió el parámetro state (canal)"}, status_code=400)
+
+    channel = state
 
     async with httpx.AsyncClient() as client:
         token_response = await client.post("https://id.twitch.tv/oauth2/token", data={
@@ -40,13 +48,14 @@ async def auth_callback(request: Request, channel: str = Query(..., description=
             "client_secret": CLIENT_SECRET,
             "code": code,
             "grant_type": "authorization_code",
-            "redirect_uri": REDIRECT_URI + f"?channel={channel}"
+            "redirect_uri": REDIRECT_URI
         })
         token_data = token_response.json()
 
-        access_token = token_data.get("access_token")
-        if not access_token:
-            return JSONResponse({"error": "No se pudo obtener el access token"}, status_code=400)
+        if "access_token" not in token_data:
+            return JSONResponse({"error": "No se pudo obtener el access token", "details": token_data}, status_code=400)
+
+        access_token = token_data["access_token"]
 
         headers = {
             "Client-ID": CLIENT_ID,
@@ -63,7 +72,7 @@ async def auth_callback(request: Request, channel: str = Query(..., description=
         user_info = user_data["data"][0]
         user_id = user_info["id"]
 
-        # Obtener info del canal dinámico
+        # Obtener info del canal dinámico recibido en state
         channel_response = await client.get(f"https://api.twitch.tv/helix/users?login={channel}", headers=headers)
         channel_data = channel_response.json()
 
